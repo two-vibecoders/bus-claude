@@ -1,0 +1,100 @@
+# Подтягивает skills/bus из jtapes/claude-bus.
+# Корневой README.md (текст org) не трогает — правки остаются за вами.
+#
+# Бесплатно для публичного репо: минуты GitHub Actions + встроенный GITHUB_TOKEN.
+# Токены Cursor / Claude / OpenAI не используются.
+
+name: Sync upstream
+
+on:
+  schedule:
+    # Раз в сутки ~09:00 МСК (06:00 UTC). Один короткий прогон — обычно <1 мин.
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout bus-claude
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Pull skills/bus from jtapes/claude-bus
+        id: pull
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          git clone --depth 1 --branch main https://github.com/jtapes/claude-bus.git /tmp/upstream
+          SHA="$(git -C /tmp/upstream rev-parse HEAD)"
+          SHORT="$(git -C /tmp/upstream rev-parse --short HEAD)"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "short=$SHORT" >> "$GITHUB_OUTPUT"
+
+          if [[ ! -d /tmp/upstream/skills/bus ]]; then
+            echo 'В upstream нет skills/bus — структура репо изменилась.'
+            exit 1
+          fi
+
+          mkdir -p skills
+          rm -rf skills/bus
+          cp -a /tmp/upstream/skills/bus skills/bus
+
+          # LICENSE из оригинала, если ещё нет
+          if [[ -f /tmp/upstream/LICENSE && ! -f LICENSE ]]; then
+            cp /tmp/upstream/LICENSE LICENSE
+          fi
+
+          git add skills/bus
+          [[ -f LICENSE ]] && git add LICENSE || true
+
+          if git diff --staged --quiet; then
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+            echo 'skills/bus уже совпадает с upstream.'
+            exit 0
+          fi
+          echo 'changed=true' >> "$GITHUB_OUTPUT"
+
+          BRANCH=sync/upstream
+          git checkout -B "$BRANCH"
+          git commit -m "sync: skills/bus from jtapes/claude-bus@${SHORT}"
+          git push -u origin "$BRANCH" --force
+
+      - name: Open or update pull request
+        if: steps.pull.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHORT: ${{ steps.pull.outputs.short }}
+          SHA: ${{ steps.pull.outputs.sha }}
+        run: |
+          set -euo pipefail
+          BRANCH=sync/upstream
+          BODY="$(cat <<EOF
+          Автосинхронизация \`skills/bus\` из [jtapes/claude-bus](https://github.com/jtapes/claude-bus).
+
+          - Upstream commit: [\`${SHORT}\`](https://github.com/jtapes/claude-bus/commit/${SHA})
+          - Корневой \`README.md\` **не** перезаписывается (описание org).
+
+          После мержа пользователи могут обновить локальный скилл из этого репозитория.
+          EOF
+          )"
+          EXISTING="$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')"
+          if [[ -z "$EXISTING" ]]; then
+            gh pr create --base master --head "$BRANCH" \
+              --title "sync: skills/bus from jtapes/claude-bus@${SHORT}" \
+              --body "$BODY"
+          else
+            gh pr edit "$EXISTING" --title "sync: skills/bus from jtapes/claude-bus@${SHORT}" --body "$BODY"
+            echo "Обновлён PR #$EXISTING"
+          fi
