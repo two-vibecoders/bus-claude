@@ -1,11 +1,8 @@
-# Подтягивает skills/bus из jtapes/claude-bus прямо в master.
+# Подтягивает skills/bus из jtapes/claude-bus и открывает PR.
 # Корневой README.md (описание org) не перезаписывается.
 #
-# Бесплатно для публичного репо:
-# - минуты GitHub Actions (public ≈ безлимит на free)
-# - встроенный GITHUB_TOKEN
-# Токены Cursor / Claude / OpenAI не используются.
-# Cron раз в сутки, прогон обычно <1 мин.
+# Бесплатно для публичного репо: минуты Actions + GITHUB_TOKEN.
+# Токены Cursor / Claude не используются. Cron раз в сутки, обычно <1 мин.
 
 name: Sync upstream
 
@@ -17,6 +14,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 concurrency:
   group: sync-upstream
@@ -31,7 +29,9 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Sync skills/bus from jtapes/claude-bus
+      - name: Sync skills/bus and open PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
@@ -56,11 +56,36 @@ jobs:
           git add skills/bus
           [[ -f LICENSE ]] && git add LICENSE || true
 
+          BRANCH=sync/upstream
+
           if git diff --staged --quiet; then
+            # Нечего коммитить: если висит старый PR без новых изменений — ок
             echo "Уже актуально: jtapes/claude-bus@${SHORT}"
             exit 0
           fi
 
+          git checkout -B "$BRANCH"
           git commit -m "sync: skills/bus from jtapes/claude-bus@${SHORT}"
-          git push origin HEAD:master
-          echo "Готово: master ← jtapes/claude-bus@${SHORT} (${SHA})"
+          git push -u origin "$BRANCH" --force
+
+          BODY="$(cat <<EOF
+          Автосинхронизация \`skills/bus\` из [jtapes/claude-bus](https://github.com/jtapes/claude-bus).
+
+          - Upstream: [\`${SHORT}\`](https://github.com/jtapes/claude-bus/commit/${SHA})
+          - Корневой \`README.md\` **не** перезаписывается (описание org)
+
+          После ревью — Merge. Локальный скилл обновляется из этого репозитория.
+          EOF
+          )"
+
+          EXISTING="$(gh pr list --head "$BRANCH" --base master --state open --json number --jq '.[0].number // empty')"
+          if [[ -z "$EXISTING" ]]; then
+            gh pr create --base master --head "$BRANCH" \
+              --title "sync: skills/bus from jtapes/claude-bus@${SHORT}" \
+              --body "$BODY"
+          else
+            gh pr edit "$EXISTING" \
+              --title "sync: skills/bus from jtapes/claude-bus@${SHORT}" \
+              --body "$BODY"
+            echo "Обновлён PR #${EXISTING}"
+          fi
