@@ -2,14 +2,14 @@
 # Корневой README.md (описание org) не перезаписывается.
 #
 # Бесплатно для публичного репо: минуты Actions + GITHUB_TOKEN.
-# Токены Cursor / Claude не используются. Cron раз в сутки, обычно <1 мин.
+# Токены Cursor / Claude не используются. Cron каждый час, обычно <1 мин.
 
 name: Sync upstream
 
 on:
   schedule:
-    # ~09:00 МСК
-    - cron: '0 6 * * *'
+    # Каждый час (UTC)
+    - cron: '0 * * * *'
   workflow_dispatch:
 
 permissions:
